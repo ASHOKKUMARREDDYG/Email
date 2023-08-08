@@ -1,0 +1,536 @@
+FUNCTION zqfm_create_deviation_pa.
+*"----------------------------------------------------------------------
+*"*"Local Interface:
+*"  IMPORTING
+*"     VALUE(I_NOTIF_TYPE) LIKE  BAPI2078-NOTIF_TYPE OPTIONAL
+*"     VALUE(I_PLANT) LIKE  MARC-WERKS OPTIONAL
+*"     VALUE(I_WORKCNTR) LIKE  YMII_PROC_VAR-ARBPL OPTIONAL
+*"     VALUE(I_ORDNUM) LIKE  CAUFV-AUFNR OPTIONAL
+*"     VALUE(I_VORNR) LIKE  YMII_S027-INSPOPER OPTIONAL
+*"     VALUE(I_INSPCHAR) LIKE  YMII_S027-INSPCHAR OPTIONAL
+*"     VALUE(I_MATNR) LIKE  MARA-MATNR
+*"     VALUE(I_SERNR) LIKE  EQUI-GERNR
+*"     VALUE(I_EQUNR) LIKE  VIQMEL-EQUNR OPTIONAL
+*"     VALUE(I_INSLOT) LIKE  VIQMEL-PRUEFLOS OPTIONAL
+*"     VALUE(I_SOURCE) TYPE  YMII_S032 OPTIONAL
+*"     VALUE(I_FUNCTION) TYPE  YMII_S032 OPTIONAL
+*"     VALUE(I_PROB_PART) TYPE  YMII_S032 OPTIONAL
+*"     VALUE(I_PROBLEM) TYPE  YMII_S032 OPTIONAL
+*"     VALUE(I_PROB_OWNER) TYPE  YMII_S032 OPTIONAL
+*"     VALUE(I_TEAM) TYPE  YMII_S032 OPTIONAL
+*"     VALUE(I_4M) TYPE  YMII_S032 OPTIONAL
+*"     VALUE(I_ACTION) TYPE  YMII_S032 OPTIONAL
+*"     VALUE(I_ROOT_CAUSE) TYPE  YMII_S032 OPTIONAL
+*"     VALUE(I_QA_STATUS) TYPE  YMII_S032 OPTIONAL
+*"     VALUE(I_NOTIF_DATE) TYPE  SY-DATUM DEFAULT SY-DATUM
+*"     VALUE(I_NOTIF_TIME) TYPE  SY-UZEIT DEFAULT SY-UZEIT
+*"     VALUE(I_REQ_START_DATE) TYPE  SY-DATUM DEFAULT SY-DATUM
+*"     VALUE(I_REQ_START_TIME) TYPE  SY-UZEIT DEFAULT SY-UZEIT
+*"     VALUE(I_REQ_END_DATE) TYPE  SY-DATUM OPTIONAL
+*"     VALUE(I_REQ_END_TIME) TYPE  SY-UZEIT OPTIONAL
+*"     VALUE(I_MA_START_DATE) TYPE  SY-DATUM DEFAULT SY-DATUM
+*"     VALUE(I_MA_START_TIME) TYPE  SY-UZEIT DEFAULT SY-UZEIT
+*"     VALUE(I_MA_END_DATE) TYPE  SY-DATUM OPTIONAL
+*"     VALUE(I_MA_END_TIME) TYPE  SY-UZEIT OPTIONAL
+*"     VALUE(I_REPAIRED_BY) TYPE  VIQMEL-INSPK OPTIONAL
+*"     VALUE(I_INSP_DATE) TYPE  VIQMEL-DATAN OPTIONAL
+*"     VALUE(I_REPORTBY) TYPE  VIQMEL-ZPROBOWN OPTIONAL
+*"     VALUE(I_WARNING) TYPE  CHAR1 OPTIONAL
+*"     VALUE(I_FTT_RELEVANT) TYPE  CHAR1 OPTIONAL
+*"     VALUE(I_IMPACTS_GR) TYPE  CHAR1 OPTIONAL
+*"     VALUE(I_REWORK_TIME) TYPE  VIQMEL-ZDOWNTIME OPTIONAL
+*"     VALUE(I_SEVERITY) TYPE  VIQMEL-PRIOK OPTIONAL
+*"     VALUE(I_CREATED_BY) TYPE  SY-UNAME DEFAULT SY-UNAME
+*"     VALUE(I_INDEP_DEV) TYPE  VIQMEL-ZRECURR OPTIONAL
+*"     VALUE(I_NOTIF_STATE) TYPE  VIQMEL-ZNOTIF_STATE_YG OPTIONAL
+*"     VALUE(I_CHANGED_BY) TYPE  SY-UNAME DEFAULT SY-UNAME
+*"     VALUE(I_REWORK) TYPE  CHAR1 OPTIONAL
+*"  EXPORTING
+*"     VALUE(RETURN) LIKE  BAPIRET2 STRUCTURE  BAPIRET2
+*"  TABLES
+*"      T_LONGTEXT_NOTES STRUCTURE  YMII_S161 OPTIONAL
+*"      T_LONGTEXT_ACTION_NOTES STRUCTURE  YMII_S161 OPTIONAL
+*"      T_RECIPIENTS STRUCTURE  ZQFM_EMAIL_RCP OPTIONAL
+*"----------------------------------------------------------------------
+*Copy from       : YMII_CREATE_DEVIATION_YG
+*Author          : EC20645
+*Description     : FM to create Notification for Product Audit
+*-----------------------------------------------------------------------
+*Id              : &001#
+*Date            : 22-05-2022
+*Author          : A408712
+*CR/VINST Number : INC102531904
+*SOLMAN Number   : 20073793
+*Description     : MII/Partly empty deviations with status black
+*                  (no notification status stored)
+*-----------------------------------------------------------------------
+*Id              : &002#
+*Date            : 2023-07-25
+*Author          : EC20645
+*CR/VINST Number : PA Project
+*SOLMAN Number   :
+*Description     : Initial development after copy and creation
+*-----------------------------------------------------------------------
+
+*Data Declaration
+  DATA : lit_return TYPE TABLE OF bapiret2,                                                    "$smartS4: #909
+         lts_viqmel TYPE viqmel,                                                               "$smartS4: #909
+         lts_riwo03 TYPE riwo03,                                                               "$smartS4: #909
+         lts_riqs5  TYPE riqs5,                                                                "$smartS4: #909
+         lv_qmnum  TYPE qmel-qmnum,
+         lv_mandt  TYPE qmel-mandt.
+  DATA : lit_proc          TYPE TABLE OF ymii_proc_01,                                         "$smartS4: #909
+         lit_split         TYPE TABLE OF ymii_email_rcp-emailid,                               "$smartS4: #909
+         lwa_receivers    TYPE somlreci1,
+         lit_receivers    TYPE STANDARD TABLE OF somlreci1,
+         lwa_packing_list TYPE sopcklsti1,
+         lit_packing_list TYPE STANDARD TABLE OF sopcklsti1,
+         lit_message      TYPE STANDARD TABLE OF solisti1,                                     "$smartS4: #909
+         lwa_message      TYPE solisti1,                                                       "$smartS4: #909
+         lts_doc_data     LIKE sodocchgi1,                                                     "$smartS4: #909
+         lv_sent_all(1)   TYPE c,
+         lv_demerit(3),                                                                        "&002#
+         lv_varkey        TYPE  rstable-varkey.
+
+  CONSTANTS:
+    lc_e     TYPE c LENGTH 01 VALUE 'E',
+    lc_table TYPE tabname     VALUE 'QMEL',
+    lc_tab   TYPE tabname     VALUE 'QMIH'.
+
+  IF i_matnr IS NOT INITIAL AND i_plant IS NOT INITIAL.
+    SELECT SINGLE matnr
+            INTO @DATA(lwa_matnr)                                                              "$smartS4: #909
+            FROM marc
+            WHERE matnr = @i_matnr AND
+                  werks = @i_plant.
+    IF sy-subrc NE 0.
+      return-type = 'E'.
+      return-message = |Material { i_matnr } does not belong plant:{ i_plant }|.
+      EXIT.
+    ENDIF.
+  ENDIF.
+
+  IF i_workcntr IS NOT INITIAL.
+    SELECT objid                                                                               "$smartS4: #601
+      FROM crhd
+      WHERE arbpl = @i_workcntr AND                                                            "$smartS4: #232
+            objty = 'A' AND
+            werks = @i_plant                                                                   "$smartS4: #232
+      ORDER BY PRIMARY KEY                                                                     "$smartS4: #601
+      INTO @lts_riqs5-arbpl UP TO 1 ROWS.                                            "$smartS4: #232 #601 #909
+    ENDSELECT.                                                                                 "$smartS4: #601
+  ENDIF.
+
+  IF i_equnr IS NOT INITIAL.
+    CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+      EXPORTING
+        input  = i_equnr
+      IMPORTING
+        output = i_equnr.
+  ENDIF.
+  IF i_notif_state IS INITIAL.
+    i_notif_state = 'N'.
+  ENDIF.
+
+  "Fill the header structure
+  lts_riqs5-qmart     = i_notif_type.                                                          "$smartS4: #909
+  lts_riqs5-matnr     = i_matnr.                                                               "$smartS4: #909
+  lts_riqs5-mawerk    = i_plant.                                                               "$smartS4: #909
+  lts_riqs5-arbplwerk = i_plant.                                                               "$smartS4: #909
+  lts_riqs5-equnr     = i_equnr.                                                               "$smartS4: #909
+  lts_riqs5-prueflos  = i_inslot.                                                              "$smartS4: #909
+  lts_riqs5-ausvn     = i_ma_start_date.                                                       "$smartS4: #909
+  lts_riqs5-auztv     = i_ma_start_time.                                                       "$smartS4: #909
+  lts_riqs5-ausbs     = i_ma_end_date.                                                         "$smartS4: #909
+  lts_riqs5-auztb     = i_ma_end_time.                                                         "$smartS4: #909
+  lts_riqs5-qmnam     = i_created_by.                                                          "$smartS4: #909
+  lts_riqs5-qmdat     = i_notif_date.                                                          "$smartS4: #909
+  lts_riqs5-mzeit     = i_notif_time.                                                          "$smartS4: #909
+  lts_riqs5-strmn     = i_req_start_date.                                                      "$smartS4: #909
+  lts_riqs5-strur     = i_req_start_time.                                                      "$smartS4: #909
+  lts_riqs5-ltrmn     = i_req_end_date.                                                        "$smartS4: #909
+  lts_riqs5-ltrur     = i_req_end_time.                                                        "$smartS4: #909
+  lts_riqs5-fertaufnr = i_ordnum.                                                              "$smartS4: #909
+
+  "Create notification
+  CALL FUNCTION 'IQS4_CREATE_NOTIFICATION'
+    EXPORTING
+      i_riqs5            = lts_riqs5                                                           "$smartS4: #909
+      i_task_det         = 'X'
+      i_post             = 'X'
+      i_commit           = 'X'
+      i_wait             = 'X'
+      i_refresh_complete = 'X'
+      i_rfc_call         = 'X'
+    IMPORTING
+      e_viqmel           = lts_viqmel                                                          "$smartS4: #909
+      e_riwo03           = lts_riwo03                                                          "$smartS4: #909
+    TABLES
+      return             = lit_return. "#EC CI_USAGE_OK[2438110]                          "$smartS4: #615 #909
+
+  IF lts_viqmel-qmnum IS NOT INITIAL.                                                          "$smartS4: #909
+
+    WAIT UP TO 1 SECONDS.
+
+* Begin of change-&001#
+    SELECT SINGLE mandt, qmnum                                                                 "$smartS4: #232
+                  FROM qmel
+                  WHERE qmnum = @lts_viqmel-qmnum                                         "$smartS4: #232 #909
+                  INTO (@lv_mandt, @lv_qmnum).                                                 "$smartS4: #232
+* End of change- &001#
+
+    IF sy-subrc EQ 0.
+      READ TABLE t_longtext_notes
+           INTO DATA(lwa_issuetext) INDEX 1.                                                   "$smartS4: #909
+      READ TABLE t_longtext_action_notes
+           INTO DATA(lwa_repairtext) INDEX 1.                                                  "$smartS4: #909
+
+* Begin of change- &001#
+      CONCATENATE lv_mandt lv_qmnum INTO lv_varkey.
+* End of change- &001#
+
+      CALL FUNCTION 'ENQUEUE_E_TABLE'
+        EXPORTING
+          mode_rstable   = lc_e
+          tabname        = lc_table
+* Begin of change- &001#
+          varkey         = lv_varkey
+* End of change- &001#
+        EXCEPTIONS
+          foreign_lock   = 1
+          system_failure = 2
+          OTHERS         = 3.
+      IF sy-subrc NE 0.
+        return-type    = 'E'.
+        return-message = 'QMEL table updation failed'.
+      ELSE.
+        UPDATE qmel
+               SET priok = @i_severity,                                                        "$smartS4: #232
+                   zarbpl = @i_workcntr,                                                       "$smartS4: #232
+                   zprobown = @i_reportby,                                                     "$smartS4: #232
+                   zvmline  = @i_warning,                                                      "$smartS4: #232
+                   zrecurr = @i_indep_dev,                                                     "$smartS4: #232
+                   zdowntime = @i_rework_time,                                                 "$smartS4: #232
+                   zfttrel = @i_ftt_relevant,                                                  "$smartS4: #232
+                   zcgrp_src_yg = @i_source-qmgrp,                                             "$smartS4: #232
+                   zcode_src_yg = @i_source-qmcod,                                             "$smartS4: #232
+                   zcgrp_func_yg = @i_function-qmgrp,                                          "$smartS4: #232
+                   zcode_func_yg  = @i_function-qmcod,                                         "$smartS4: #232
+                   zcgrp_prob_part_yg  = @i_prob_part-qmgrp,                                   "$smartS4: #232
+                   zcode_prob_part_yg   = @i_prob_part-qmcod,                                  "$smartS4: #232
+                   zcgrp_prob_yg  = @i_problem-qmgrp,                                          "$smartS4: #232
+                   zcode_prob_yg    = @i_problem-qmcod,                                        "$smartS4: #232
+                   zcgrp_prob_own_yg = @i_prob_owner-qmgrp,                                    "$smartS4: #232
+                   zcode_prob_own_yg  = @i_prob_owner-qmcod,                                   "$smartS4: #232
+                   zcgrp_4m_yg   = @i_4m-qmgrp,                                                "$smartS4: #232
+                   zcode_4m_yg     = @i_4m-qmcod,                                              "$smartS4: #232
+                   zimpacts_gr_yg = @i_impacts_gr,                                             "$smartS4: #232
+                   zcgrp_action_yg   = @i_action-qmgrp,                                        "$smartS4: #232
+                   zcode_action_yg     = @i_action-qmcod,                                      "$smartS4: #232
+                   zcgrp_root_cause_yg  = @i_root_cause-qmgrp,                                 "$smartS4: #232
+                   zcode_root_cause_yg    = @i_root_cause-qmcod,                               "$smartS4: #232
+                   zcgrp_qa_stat_yg = @i_qa_status-qmgrp,                                      "$smartS4: #232
+                   zcode_qa_stat_yg = @i_qa_status-qmcod,                                      "$smartS4: #232
+                   znotif_state_yg = @i_notif_state,                                           "$smartS4: #232
+                   zissue_long_text = @lwa_issuetext-tdline,                              "$smartS4: #232 #909
+                   zrepair_long_text  = @lwa_repairtext-tdline,                           "$smartS4: #232 #909
+                   zvornr             = @i_vornr,                                              "$smartS4: #232
+                   zinspchar          = @i_inspchar,                                           "$smartS4: #232
+                   zcgrp_team         = @i_team-qmgrp,                                         "$smartS4: #232
+                   zcode_team         = @i_team-qmcod                                          "$smartS4: #232
+                   WHERE qmnum = @lv_qmnum.                                                    "$smartS4: #232
+        IF sy-subrc = 0.
+
+          CALL FUNCTION 'ENQUEUE_E_TABLE'
+            EXPORTING
+              mode_rstable   = lc_e
+              tabname        = lc_tab
+* Begin of change- &001#
+              varkey         = lv_varkey
+* End of change- &001#
+            EXCEPTIONS
+              foreign_lock   = 1
+              system_failure = 2
+              OTHERS         = 3.
+          IF sy-subrc NE 0.
+            return-type    = 'E'.
+            return-message =
+            |{ lts_viqmel-qmnum }: QMIH table updation failed|.                                "$smartS4: #909
+          ELSE.
+
+            UPDATE qmih SET inspk = @i_repaired_by,                                            "$smartS4: #232
+                            datan = @i_insp_date                                               "$smartS4: #232
+                            WHERE qmnum = @lv_qmnum.                                           "$smartS4: #232
+            IF sy-subrc = 0.
+              return-type    = 'S'.
+              return-message = lts_viqmel-qmnum.                                               "$smartS4: #909
+            ELSE.
+              return-type    = 'E'.
+              return-message =
+              |{ lts_viqmel-qmnum }: QMIH table updation failed|.                              "$smartS4: #909
+            ENDIF.
+            " Unlock Table
+            CALL FUNCTION 'DEQUEUE_E_TABLE'
+              EXPORTING
+                mode_rstable = lc_e
+                tabname      = lc_tab
+* Begin of change- &001#
+                varkey       = lv_varkey.
+* End of change- &001#
+          ENDIF.
+        ELSE.
+          return-type    = 'E'.
+          return-message = 'QMEL table updation failed'.
+        ENDIF.
+        " Unlock Table
+        CALL FUNCTION 'DEQUEUE_E_TABLE'
+          EXPORTING
+            mode_rstable = lc_e
+            tabname      = lc_table
+* Begin of change- &001#
+            varkey       = lv_varkey.
+* End of change- &001#
+      ENDIF.
+
+*---------------------------------------
+* Trigger email if there is a notif with severity 100
+
+* &002# Begin of Comment Out
+*      CALL FUNCTION 'YMII_GET_VAR_VALUE'
+*        EXPORTING
+*          i_werks    = i_plant
+*          i_mii_line = space
+*          i_yyvar    = 'Q7050'
+*        TABLES
+*          et_output  = lit_proc.                                                               "$smartS4: #909
+*
+*      READ TABLE lit_proc INTO DATA(lwa_proc) INDEX 1.                                         "$smartS4: #909
+*      IF sy-subrc EQ 0 AND lwa_proc-yyvalue = 'Y'.                                             "$smartS4: #909
+*        IF i_severity = 'A'.
+* &002# End of Comment Out
+
+          SELECT werks, param, catalog_type
+            FROM ymii_scr_003                       "For CED
+*           FROM ymii_scr_002                       "For CES Only
+            INTO TABLE @DATA(lit_scr001)                                                       "$smartS4: #909
+            WHERE werks = @i_plant.
+
+          SELECT SINGLE qmnum, zcgrp_src_yg, zcode_src_yg, zcgrp_prob_part_yg,                 "$smartS4: #712
+            zcode_prob_part_yg, zcgrp_prob_yg, zcode_prob_yg, zcgrp_prob_own_yg,               "$smartS4: #712
+            zcode_prob_own_yg                                                                  "$smartS4: #712
+            FROM qmel
+            WHERE qmnum = @lts_viqmel-qmnum                                                    "$smartS4: #909
+            INTO @DATA(lwa_qmel).                                                              "$smartS4: #909
+
+* &002# Begin of Comment Out
+*          SELECT SINGLE emailid
+*                 FROM ymii_email_rcp
+*                 INTO @DATA(lwa_emailid)                                                       "$smartS4: #909
+*                 WHERE werks = @i_plant
+*                 AND   mngrp = @lwa_qmel-zcgrp_prob_own_yg                                     "$smartS4: #909
+*                 AND   mncod = @lwa_qmel-zcode_prob_own_yg.                                    "$smartS4: #909
+*          IF sy-subrc EQ 0.
+
+            "Fill the receiver mail ID
+*           SPLIT lwa_emailid AT ';' INTO TABLE lit_split.                                     "$smartS4: #909
+*           CLEAR:lit_receivers.
+*           LOOP AT lit_split INTO DATA(lwa_split).                                            "&002#
+            LOOP AT t_recipients.                                                                "&002#
+              lwa_receivers-receiver = t_recipients-emailid.
+              lwa_receivers-rec_type = 'U'.
+              lwa_receivers-com_type = 'INT'.
+              lwa_receivers-notif_del = 'X'.
+              lwa_receivers-notif_ndel = 'X'.
+              APPEND lwa_receivers TO lit_receivers.
+              CLEAR: lwa_receivers.
+            ENDLOOP.
+
+            "Describe the body of the message
+            CLEAR: lwa_message,                                                                "$smartS4: #909
+                   lit_message,                                                                "$smartS4: #909
+                   lwa_packing_list,
+                   lit_packing_list.
+
+            IF i_severity = 'A'.
+              lv_demerit = '100'.
+            ELSE.
+               IF     i_severity = 'B'. lv_demerit = '25'.
+               ELSEIF i_severity = 'C'. lv_demerit = '5'.
+               ELSEIF i_severity = 'D'. lv_demerit = '1'.
+               ENDIF.
+            ENDIF.
+
+            lwa_message-line = 'Hello,'.
+            APPEND lwa_message TO lit_message.
+            CLEAR lwa_message.                                                                 "$smartS4: #909
+            APPEND lwa_message TO lit_message. "Blank line                                     "$smartS4: #909
+
+
+            lwa_message-line = 'This is the result of Product Audit.'.
+            APPEND lwa_message TO lit_message.
+            CLEAR lwa_message.                                                                 "$smartS4: #909
+            APPEND lwa_message TO lit_message. "Blank line                                     "$smartS4: #909
+
+            IF i_severity EQ 'A'.
+              lwa_message-line = '*** This issue is a potential Shipment Stop. ***'.
+              APPEND lwa_message TO lit_message.
+            ENDIF.
+
+            CLEAR lwa_message.                                                                 "$smartS4: #909
+            APPEND lwa_message TO lit_message. "Blank line                                     "$smartS4: #909
+
+            lwa_message-line = '1) Machiine Information'.
+            APPEND lwa_message TO lit_message.
+            CONCATENATE ' - Model Name : ' i_matnr INTO lwa_message-line SEPARATED BY space.
+            APPEND lwa_message TO lit_message.
+            CONCATENATE ' - Serial No : ' i_sernr INTO lwa_message-line  SEPARATED BY space.
+            APPEND lwa_message TO lit_message.
+
+*       Problem
+            READ TABLE lit_scr001 INTO DATA(lwa_scr001)
+                 WITH KEY param = 'Problem'.
+            IF sy-subrc = 0.
+              SELECT kurztext                                                                  "$smartS4: #601
+                     FROM qpct
+                     WHERE katalogart = @lwa_scr001-catalog_type                          "$smartS4: #232 #909
+                     AND   codegruppe = @lwa_qmel-zcgrp_prob_yg                           "$smartS4: #232 #909
+                     AND   code       = @lwa_qmel-zcode_prob_yg                           "$smartS4: #232 #909
+                     ORDER BY PRIMARY KEY                                                      "$smartS4: #601
+                     INTO @DATA(lwa_kurztext) UP TO 1 ROWS.                               "$smartS4: #232 #601 #909
+              ENDSELECT.                                                                       "$smartS4: #601
+            ENDIF.
+            CONCATENATE '2) Problem Statement :' lwa_kurztext
+                   INTO lwa_message-line SEPARATED BY space.
+            APPEND lwa_message TO lit_message.                                               "$smartS4: #909
+
+
+* Demerit point
+            CONCATENATE '3) Demerit Point : ' lv_demerit
+                   INTO lwa_message-line SEPARATED BY space.
+            APPEND lwa_message TO lit_message.
+
+* Responsible area (Problem Owner)
+            CLEAR: lwa_kurztext.
+            READ TABLE lit_scr001 INTO lwa_scr001                                              "$smartS4: #909
+                 WITH KEY param = 'Problem Owner'.
+            IF sy-subrc = 0.
+*             CLEAR: lwa_grp_desc.                                                             "$smartS4: #909
+              SELECT ktx01                                                                     "$smartS4: #601
+                FROM qpam
+                WHERE katalogart = @lwa_scr001-catalog_type                               "$smartS4: #232 #909
+                AND   auswahlmge = @lwa_qmel-zcgrp_prob_own_yg                            "$smartS4: #232 #909
+                ORDER BY PRIMARY KEY                                                           "$smartS4: #601
+                INTO @DATA(lwa_grp_desc) UP TO 1 ROWS.                                    "$smartS4: #232 #601 #909
+              ENDSELECT.                                                                       "$smartS4: #601
+
+              SELECT kurztext                                                                  "$smartS4: #601
+                     FROM qpct
+                     WHERE katalogart = @lwa_scr001-catalog_type                          "$smartS4: #232 #909
+                     AND   codegruppe = @lwa_qmel-zcgrp_prob_own_yg                       "$smartS4: #232 #909
+                     AND   code       = @lwa_qmel-zcode_prob_own_yg                       "$smartS4: #232 #909
+                     ORDER BY PRIMARY KEY                                                      "$smartS4: #601
+                     INTO @lwa_kurztext UP TO 1 ROWS.                                "$smartS4: #232 #601 #909
+              ENDSELECT.                                                                       "$smartS4: #601
+              IF sy-subrc EQ 0 AND lwa_kurztext IS NOT INITIAL.                                "$smartS4: #909
+                CONCATENATE lwa_grp_desc                                                       "$smartS4: #909
+                            lwa_kurztext                                                       "$smartS4: #909
+                            INTO lwa_kurztext                                                  "$smartS4: #909
+                            SEPARATED BY '-'.
+              ENDIF.
+            ENDIF.
+            CONCATENATE '4) Responsible Area : ' lwa_kurztext
+                   INTO lwa_message-line SEPARATED BY space.
+            APPEND lwa_message TO lit_message.                                               "$smartS4: #909
+
+* Note
+            lwa_message-line = '5) Note :'.
+            APPEND lwa_message TO lit_message.                                               "$smartS4: #909
+            LOOP AT t_longtext_notes.
+              CONCATENATE ' ' t_longtext_notes-tdline
+                     INTO lwa_message SEPARATED BY space.
+              APPEND lwa_message TO lit_message.                                               "$smartS4: #909
+            ENDLOOP.
+
+* Mail attributes & header
+            lwa_packing_list-transf_bin = space.
+            lwa_packing_list-head_start = 1.
+            lwa_packing_list-head_num = 0.
+            lwa_packing_list-body_start = 1.
+            DESCRIBE TABLE lit_message LINES lwa_packing_list-body_num.                        "$smartS4: #909
+
+            lwa_packing_list-doc_type = 'RAW'.
+            APPEND lwa_packing_list TO lit_packing_list.
+
+            "Describe the Subject of the mail
+            CLEAR lts_doc_data.                                                                "$smartS4: #909
+            lts_doc_data-obj_langu = sy-langu.                                                 "$smartS4: #909
+            lts_doc_data-obj_name = 'SAPRPT'.                                                  "$smartS4: #909
+            IF i_severity = 'A'.
+              lts_doc_data-priority = '1'.
+            ENDIF.
+
+            CONCATENATE 'Product Audit : ' i_matnr i_sernr '-' lv_demerit 'Demerits'
+                   INTO lts_doc_data-obj_descr SEPARATED BY space.
+
+            lts_doc_data-sensitivty = 'F'.                                                     "$smartS4: #909
+
+            "Send email
+            CALL FUNCTION 'SO_DOCUMENT_SEND_API1'
+              EXPORTING
+                document_data              = lts_doc_data                                      "$smartS4: #909
+                commit_work                = 'X'
+              IMPORTING
+                sent_to_all                = lv_sent_all
+              TABLES
+                packing_list               = lit_packing_list
+                contents_txt               = lit_message                                       "$smartS4: #909
+                receivers                  = lit_receivers
+              EXCEPTIONS
+                too_many_receivers         = 1
+                document_not_sent          = 2
+                document_type_not_exist    = 3
+                operation_no_authorization = 4
+                parameter_error            = 5
+                x_error                    = 6
+                enqueue_error              = 7
+                OTHERS                     = 8.
+            IF sy-subrc <> 0.
+*           Implement suitable error handling here
+            ENDIF.
+        ENDIF.
+*---------------------------------------
+  ELSE.
+    READ TABLE lit_return INTO DATA(lwa_return) WITH KEY type = 'E'.                           "$smartS4: #909
+    IF sy-subrc = 0.
+      return = lwa_return.                                                                "$smartS4: #300 #909
+    ENDIF.
+  ENDIF.
+
+*  IF i_rework  IS NOT INITIAL AND i_ordnum IS NOT INITIAL.
+*
+*    DATA: lv_objnr   TYPE jest-objnr,
+*          lv_current TYPE tj30-estat,
+*          lv_next    TYPE tj30-estat,
+*          lv_stsma   TYPE jsto-stsma.
+*
+*    CONCATENATE 'OR' i_ordnum INTO lv_objnr.
+*    lv_stsma = 'Y_PP0001'.
+*    lv_next  = 'E0013'.
+*    CALL FUNCTION 'I_CHANGE_STATUS'
+*      EXPORTING
+*        objnr          = lv_objnr
+*        estat_inactive = lv_current
+*        estat_active   = lv_next
+*        stsma          = lv_stsma.
+**       EXCEPTIONS
+**         CANNOT_UPDATE        = 1
+**         OTHERS               = 2
+*    .
+*    IF sy-subrc <> 0.
+*      return-type    = 'E'.
+*      return-message = 'Order was not set to rework'.
+*    ENDIF.
+*  ENDIF.
+
+*}   INSERT
+ENDFUNCTION.
